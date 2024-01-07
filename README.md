@@ -13,7 +13,7 @@ This custom Home Assistant sensor component scrapes electricity prices from the 
 1. **Clone or Download**: Clone this repository into your Home Assistant's `custom_components` directory or download the zip file and extract the `rae_price_scraper` folder into the `custom_components` directory.
 2. **Restart Home Assistant**
 3. **Configuration**: Add the sensor configuration to your `configuration.yaml` file with the necessary parameters.
-4. **Restart Home Assistant**: Restart your Home Assistant instance to pick up the new sensor.
+4. **Restart Home Assistant**: Restart your Home Assistant instance to pick up the new sensor. Sensor name is : sensor.rae_price_per_kwh
 
 ## Configuration
 
