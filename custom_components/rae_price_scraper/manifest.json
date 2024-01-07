@@ -1,0 +1,10 @@
+{
+  "domain": "rae_price_scraper",
+  "name": "RAE Power Price Scraper",
+  "documentation": "<link to documentation>",
+  "dependencies": [],
+  "codeowners": ["sfortis"],
+  "iot_class": "cloud_polling",
+  "requirements": ["requests", "beautifulsoup4", "urllib3"],
+  "version": "0.1.0"
+}
