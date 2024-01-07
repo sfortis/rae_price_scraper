@@ -25,7 +25,7 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
     provider = config['provider_filter']
     plan = config['plan_filter']
     url = config['url']
-    add_entities([RAEPriceSensor(provider, plan, url)])
+    add_entities([RAEPriceSensor(provider, plan, url)], True)
 
 class RAEPriceSensor(Entity):
     """Representation of the RAE Price Sensor."""
@@ -51,6 +51,11 @@ class RAEPriceSensor(Entity):
     def unit_of_measurement(self):
         """Return the unit of measurement."""
         return "EUR/kWh"
+
+    @property
+    def should_poll(self):
+        """Return the polling state."""
+        return True
 
     def update(self):
         """Fetch new state data for the sensor."""
@@ -82,10 +87,13 @@ class RAEPriceSensor(Entity):
                             item.get("Μήνας") == month_filter and
                             item.get("Ονομασία Τιμολογίου") == self._plan):
                             final_price = float(item.get("Τελική Τιμή Προμήθειας (€/MWh)")) / 1000
+                            print (final_price)
                             break
         except requests.ConnectionError as e:
-            _LOGGER.error("Error connecting to RAE: %s", e)
+            _LOGGER.error("rae_price_scraper: Error connecting to RAE: %s", e)
         except Exception as e:
-            _LOGGER.error("Error fetching data from RAE: %s", e)
+            _LOGGER.error("rae_price_scraper: Error fetching data from RAE: %s", e)
 
         self._state = final_price if final_price is not None else 'Unavailable'
+        if final_price is not None:
+            _LOGGER.info("rae_price_scraper: Updated RAE price per kWh: EUR %.3f", final_price)
