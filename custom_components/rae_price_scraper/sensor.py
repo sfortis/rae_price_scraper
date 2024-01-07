@@ -10,10 +10,8 @@ import voluptuous as vol
 
 _LOGGER = logging.getLogger(__name__)
 
-# Define the domain of your component
 DOMAIN = 'rae_price_scraper'
 
-# Define your configuration schema
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required('provider_filter'): cv.string,
     vol.Required('plan_filter'): cv.string,
@@ -21,47 +19,39 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 })
 
 def setup_platform(hass, config, add_entities, discovery_info=None):
-    """Setup the sensor platform."""
     provider = config['provider_filter']
     plan = config['plan_filter']
     url = config['url']
     add_entities([RAEPriceSensor(provider, plan, url)], True)
 
 class RAEPriceSensor(Entity):
-    """Representation of the RAE Price Sensor."""
-
     def __init__(self, provider, plan, url):
-        """Initialize the sensor."""
         self._provider = provider
         self._plan = plan
         self._url = url
-        self._state = None
+        self._state = None  # Initial state is None, which might represent no data available yet
+        self._initialized = False  # Flag to check if the sensor ever got a valid update
 
     @property
     def name(self):
-        """Return the name of the sensor."""
         return 'rae_price_per_kwh'
 
     @property
     def state(self):
-        """Return the state of the sensor."""
         return self._state
 
     @property
     def unit_of_measurement(self):
-        """Return the unit of measurement."""
         return "EUR/kWh"
 
     @property
     def should_poll(self):
-        """Return the polling state."""
         return True
 
     def update(self):
-        """Fetch new state data for the sensor."""
         month_filter = str(datetime.datetime.now().month)
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        final_price = None  # Initialize final_price as None
+        final_price = None  # Temporary variable for the new price
 
         try:
             response = requests.get(self._url, verify=False)
@@ -87,13 +77,19 @@ class RAEPriceSensor(Entity):
                             item.get("Μήνας") == month_filter and
                             item.get("Ονομασία Τιμολογίου") == self._plan):
                             final_price = float(item.get("Τελική Τιμή Προμήθειας (€/MWh)")) / 1000
-                            print (final_price)
                             break
+
+            # Only update the state and initialized flag if a new price is successfully retrieved
+            if final_price is not None:
+                self._state = f"{final_price:.3f}"
+                self._initialized = True
+                _LOGGER.info("rae_price_scraper: Updated RAE price per kWh: EUR %.3f", final_price)
+
         except requests.ConnectionError as e:
             _LOGGER.error("rae_price_scraper: Error connecting to RAE: %s", e)
         except Exception as e:
             _LOGGER.error("rae_price_scraper: Error fetching data from RAE: %s", e)
 
-        self._state = final_price if final_price is not None else 'Unavailable'
-        if final_price is not None:
-            _LOGGER.info("rae_price_scraper: Updated RAE price per kWh: EUR %.3f", final_price)
+        # If the sensor has never been initialized successfully and no price was retrieved, it remains 'Unavailable'
+        if not self._initialized and self._state is None:
+            self._state = 'Unavailable'
