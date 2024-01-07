@@ -1,7 +1,7 @@
 {
   "domain": "rae_price_scraper",
   "name": "RAE Power Price Scraper",
-  "documentation": "<link to documentation>",
+  "documentation": "https://github.com/sfortis/rae_price_scraper/blob/main/README.md",
   "dependencies": [],
   "codeowners": ["sfortis"],
   "iot_class": "cloud_polling",
