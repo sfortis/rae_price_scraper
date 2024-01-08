@@ -25,6 +25,7 @@ sensor:
     provider_filter: "ΔΕΗ"  # Replace with your provider
     plan_filter: "My Home Online"  # Replace with your plan
     url: "https://invoices.rae.gr/oikiako/"  # RAE URL (default)
+    discounted_price: "Y" # Returns the "Έκπτωση με Προϋποθέσεις" price if set to Y
     scan_interval: 86400
 ```
 

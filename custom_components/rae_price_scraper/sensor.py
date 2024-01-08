@@ -16,19 +16,22 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required('provider_filter'): cv.string,
     vol.Required('plan_filter'): cv.string,
     vol.Required('url'): cv.url,
+    vol.Optional('discounted_price', default="Y"): cv.string,
 })
 
 def setup_platform(hass, config, add_entities, discovery_info=None):
     provider = config['provider_filter']
     plan = config['plan_filter']
     url = config['url']
-    add_entities([RAEPriceSensor(provider, plan, url)], True)
+    discounted_price = config.get('discounted_price', "Y")
+    add_entities([RAEPriceSensor(provider, plan, url, discounted_price)], True)
 
 class RAEPriceSensor(Entity):
-    def __init__(self, provider, plan, url):
+    def __init__(self, provider, plan, url, discounted_price):
         self._provider = provider
         self._plan = plan
         self._url = url
+        self._discounted_price = discounted_price 
         self._state = None  # Initial state is None, which might represent no data available yet
         self._initialized = False  # Flag to check if the sensor ever got a valid update
 
@@ -76,7 +79,11 @@ class RAEPriceSensor(Entity):
                         if (item.get("Πάροχος") == self._provider and
                             item.get("Μήνας") == month_filter and
                             item.get("Ονομασία Τιμολογίου") == self._plan):
-                            final_price = float(item.get("Τελική Τιμή Προμήθειας (€/MWh)")) / 1000
+                            if self._discounted_price == "Y":
+                                price_element = "Τελική Τιμή Προμήθειας με Έκπτωση με προϋπόθεση (€/MWh)"
+                            else:  # default or if "N"
+                                price_element = "Τελική Τιμή Προμήθειας (€/MWh)"
+                            final_price = float(item.get(price_element)) / 1000
                             break
 
             # Only update the state and initialized flag if a new price is successfully retrieved
