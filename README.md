@@ -1,6 +1,6 @@
-# RAE Price Scraper for Home Assistant
+# RAE Energy Price Scraper for Home Assistant
 
-This custom Home Assistant sensor component scrapes electricity prices from the RAE (Regulatory Authority for Energy) website (https://invoices.rae.gr/oikiako/) and provides the price as a sensor in Home Assistant.
+This custom Home Assistant sensor component scrapes electricity prices from the Greek RAE (Regulatory Authority for Energy) website (https://invoices.rae.gr/oikiako/) and provides the price as a sensor in Home Assistant.
 
 ## Features
 
