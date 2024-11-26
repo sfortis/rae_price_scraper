@@ -28,6 +28,12 @@ sensor:
     discounted_price: "Y" # Returns the "Έκπτωση με Προϋποθέσεις" price if set to Y
     scan_interval: 86400
 ```
+Enable debug logging to view detailed add-on progress for troubleshooting:
+
+```yaml
+  logs:
+    custom_components.rae_price_scraper: debug
+```
 
 ## Usage
 
