@@ -24,6 +24,7 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
     plan = config['plan_filter']
     url = config['url']
     discounted_price = config.get('discounted_price', "Y")
+    _LOGGER.info("Setting up RAE Price sensor with: provider=%s, plan=%s", provider, plan)
     add_entities([RAEPriceSensor(provider, plan, url, discounted_price)], True)
 
 class RAEPriceSensor(Entity):
@@ -32,8 +33,10 @@ class RAEPriceSensor(Entity):
         self._plan = plan
         self._url = url
         self._discounted_price = discounted_price 
-        self._state = None  # Initial state is None, which might represent no data available yet
-        self._initialized = False  # Flag to check if the sensor ever got a valid update
+        self._state = None
+        self._initialized = False
+        self._last_found_month = None
+        self._attributes = {}
 
     @property
     def name(self):
@@ -51,52 +54,127 @@ class RAEPriceSensor(Entity):
     def should_poll(self):
         return True
 
+    @property
+    def extra_state_attributes(self):
+        return {
+            'last_found_month': self._last_found_month,
+            'provider': self._provider,
+            'plan': self._plan,
+            'discounted_price': self._discounted_price
+        }
+
+    def _get_previous_month(self, current_date):
+        if current_date.month == 1:
+            return current_date.replace(year=current_date.year - 1, month=12, day=1)
+        return current_date.replace(month=current_date.month - 1, day=1)
+
+    def _search_price_in_data(self, data, month_filter):
+        for item in data:
+            if (item.get("Πάροχος") == self._provider and
+                item.get("Μήνας") == month_filter and
+                item.get("Ονομασία Τιμολογίου") == self._plan):
+                
+                if self._discounted_price == "Y":
+                    price_element = "Τελική Τιμή Προμήθειας με Έκπτωση με προϋπόθεση (€/MWh)"
+                    _LOGGER.info("Using discounted price element")
+                else:
+                    price_element = "Τελική Τιμή Προμήθειας (€/MWh)"
+                    _LOGGER.info("Using standard price element")
+                
+                try:
+                    price = float(item.get(price_element))
+                    _LOGGER.info("Found price %.5f EUR/kWh for month %s", price, month_filter)
+                    return price, int(month_filter)
+                except (ValueError, TypeError) as e:
+                    _LOGGER.error("Error converting price value: %s. Raw value: %s", 
+                                e, item.get(price_element))
+        
+        _LOGGER.info("No price found for month %s", month_filter)
+        return None, None
+
     def update(self):
-        month_filter = str(datetime.datetime.now().month)
+        _LOGGER.info("Starting update for RAE Price sensor")
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        final_price = None  # Temporary variable for the new price
+        final_price = None
+        found_month = None
 
         try:
+            _LOGGER.info("Fetching data from RAE website: %s", self._url)
             response = requests.get(self._url, verify=False)
             response.encoding = 'utf-8'
 
             if response.status_code == 200:
+                _LOGGER.info("Successfully retrieved data from RAE website")
                 soup = BeautifulSoup(response.content, 'html.parser')
-                table = soup.find('table', id='billing_table')
+                rows = soup.find_all('tr', attrs={'data-invoice-id': True})
+                data = []
 
-                if table:
-                    data = []
-                    headers = [header.text for header in table.find_all('th')]
+                for row in rows:
+                    tds = row.find_all('td')
+                    if len(tds) < 4:
+                        continue
 
-                    for row in table.find_all('tr'):
-                        cells = row.find_all('td')
+                    provider = tds[0].get_text(strip=True)
+                    year = tds[1].get_text(strip=True)
+                    month = tds[2].get_text(strip=True)
+                    plan = tds[3].get_text(strip=True)
 
-                        if cells:
-                            row_data = {headers[i]: cell.text.strip() for i, cell in enumerate(cells)}
-                            data.append(row_data)
+                    off_price_td = row.find('td', class_='checkbox_ekptosi_off teliki_timi_promithias')
+                    on_price_td = row.find('td', class_='checkbox_ekptosi_on teliki_timi_promithias_meta_apo_ekptoseis_promithias')
 
-                    for item in data:
-                        if (item.get("Πάροχος") == self._provider and
-                            item.get("Μήνας") == month_filter and
-                            item.get("Ονομασία Τιμολογίου") == self._plan):
-                            if self._discounted_price == "Y":
-                                price_element = "Τελική Τιμή Προμήθειας με Έκπτωση με προϋπόθεση (€/MWh)"
-                            else:  # default or if "N"
-                                price_element = "Τελική Τιμή Προμήθειας (€/MWh)"
-                            final_price = float(item.get(price_element)) / 1000
-                            break
+                    off_price = off_price_td.get_text(strip=True) if off_price_td else None
+                    on_price = on_price_td.get_text(strip=True) if on_price_td else None
 
-            # Only update the state and initialized flag if a new price is successfully retrieved
-            if final_price is not None:
-                self._state = f"{final_price:.3f}"
-                self._initialized = True
-                _LOGGER.info("rae_price_scraper: Updated RAE price per kWh: EUR %.3f", final_price)
+                    item = {
+                        "Πάροχος": provider,
+                        "Έτος": year,
+                        "Μήνας": month,
+                        "Ονομασία Τιμολογίου": plan,
+                        "Τελική Τιμή Προμήθειας (€/MWh)": off_price,
+                        "Τελική Τιμή Προμήθειας με Έκπτωση με προϋπόθεση (€/MWh)": on_price
+                    }
+                    data.append(item)
+
+                _LOGGER.info("Successfully parsed %d rows", len(data))
+
+                current_date = datetime.datetime.now()
+                search_date = current_date
+                max_attempts = 12
+                attempts = 0
+
+                while attempts < max_attempts and final_price is None:
+                    month_filter = str(search_date.month)
+                    _LOGGER.info("Searching for price in month %s (attempt %d/%d)",
+                                 month_filter, attempts + 1, max_attempts)
+                    
+                    final_price, found_month = self._search_price_in_data(data, month_filter)
+                    
+                    if final_price is None:
+                        search_date = self._get_previous_month(search_date)
+                        attempts += 1
+                    else:
+                        break
+
+                if final_price is not None:
+                    self._state = f"{final_price:.5f}"
+                    self._initialized = True
+                    self._last_found_month = found_month
+                    _LOGGER.info("Successfully updated RAE price: %.5f EUR/kWh (Month: %d)", 
+                                 final_price, found_month)
+                else:
+                    _LOGGER.warning("No price found in the last %d months", max_attempts)
+            else:
+                _LOGGER.error("Failed to fetch data. Status code: %d", response.status_code)
 
         except requests.ConnectionError as e:
-            _LOGGER.error("rae_price_scraper: Error connecting to RAE: %s", e)
+            _LOGGER.error("Connection error while fetching RAE data: %s", e)
+        except requests.RequestException as e:
+            _LOGGER.error("Request error while fetching RAE data: %s", e)
         except Exception as e:
-            _LOGGER.error("rae_price_scraper: Error fetching data from RAE: %s", e)
+            _LOGGER.error("Unexpected error while fetching RAE data: %s", e, exc_info=True)
 
-        # If the sensor has never been initialized successfully and no price was retrieved, it remains 'Unavailable'
         if not self._initialized and self._state is None:
             self._state = 'Unavailable'
+            _LOGGER.warning("Sensor remains uninitialized, setting state to 'Unavailable'")
+
+        _LOGGER.info("Update cycle completed. Final state: %s", self._state)

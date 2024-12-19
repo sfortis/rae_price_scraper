@@ -22,10 +22,10 @@ Add the following to your `configuration.yaml` file:
 ```yaml
 sensor:
   - platform: rae_price_scraper
-    provider_filter: "ΔΕΗ"  # Replace with your provider
-    plan_filter: "My Home Online"  # Replace with your plan
-    url: "https://invoices.rae.gr/oikiako/"  # RAE URL (default)
-    discounted_price: "Y" # Returns the "Έκπτωση με Προϋποθέσεις" price if set to Y
+    provider_filter: "ΔΕΗ"
+    plan_filter: "My Home Online"
+    url: "https://invoices.rae.gr/%CE%BA%CE%B1%CF%84%CE%B1%CF%87%CF%89%CF%81%CE%B7%CE%BC%CE%AD%CE%BD%CE%B1-%CF%84%CE%B9%CE%BC%CE%BF%CE%BB%CF%8C%CE%B3%CE%B9%CE%B1-%CF%80%CF%81%CE%BF%CE%BC%CE%AE%CE%B8%CE%B5%CE%B9%CE%B1%CF%82-%CE%B7-3/"
+    discounted_price: "Y"
     scan_interval: 86400
 ```
 
