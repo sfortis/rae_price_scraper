@@ -7,6 +7,12 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
+import time
+import random
+import pickle
+import os
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +43,8 @@ class RAEPriceSensor(Entity):
         self._initialized = False
         self._last_found_month = None
         self._attributes = {}
+        # Cookie file path in HA config directory
+        self._cookie_file = os.path.join(os.path.dirname(__file__), 'rae_cookies.pkl')
 
     @property
     def name(self):
@@ -60,7 +68,8 @@ class RAEPriceSensor(Entity):
             'last_found_month': self._last_found_month,
             'provider': self._provider,
             'plan': self._plan,
-            'discounted_price': self._discounted_price
+            'discounted_price': self._discounted_price,
+            'last_update': datetime.datetime.now().isoformat()
         }
 
     def _get_previous_month(self, current_date):
@@ -76,10 +85,10 @@ class RAEPriceSensor(Entity):
                 
                 if self._discounted_price == "Y":
                     price_element = "Τελική Τιμή Προμήθειας με Έκπτωση με προϋπόθεση (€/MWh)"
-                    _LOGGER.info("Using discounted price element")
+                    _LOGGER.debug("Using discounted price element")
                 else:
                     price_element = "Τελική Τιμή Προμήθειας (€/MWh)"
-                    _LOGGER.info("Using standard price element")
+                    _LOGGER.debug("Using standard price element")
                 
                 try:
                     price = float(item.get(price_element))
@@ -89,22 +98,116 @@ class RAEPriceSensor(Entity):
                     _LOGGER.error("Error converting price value: %s. Raw value: %s", 
                                 e, item.get(price_element))
         
-        _LOGGER.info("No price found for month %s", month_filter)
+        _LOGGER.debug("No price found for month %s", month_filter)
         return None, None
 
-    def update(self):
-        _LOGGER.info("Starting update for RAE Price sensor")
+    def _fetch_with_session_persistence(self):
+        """Fetch using session persistence method that bypasses Incapsula"""
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        # Create session with retry strategy
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[500, 502, 503, 504]
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
+        # Load saved cookies if they exist
+        if os.path.exists(self._cookie_file):
+            try:
+                with open(self._cookie_file, 'rb') as f:
+                    cookies = pickle.load(f)
+                    session.cookies.update(cookies)
+                    _LOGGER.debug("Loaded saved cookies")
+            except Exception as e:
+                _LOGGER.warning("Could not load saved cookies: %s", e)
+        
+        # Set browser-like headers
+        session.headers = {
+            'Host': 'energycost.gr',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'el-GR,el;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+        
+        base_url = "https://energycost.gr"
+        
+        try:
+            # Step 1: Visit homepage first (like a real user)
+            _LOGGER.info("Visiting homepage first...")
+            session.headers['Sec-Fetch-Site'] = 'none'
+            session.headers['Sec-Fetch-Mode'] = 'navigate'
+            session.headers['Sec-Fetch-Dest'] = 'document'
+            session.headers['Sec-Fetch-User'] = '?1'
+            
+            resp1 = session.get(base_url, timeout=30, verify=False, allow_redirects=True)
+            _LOGGER.debug("Homepage visit status: %d", resp1.status_code)
+            
+            # Save cookies for future use
+            try:
+                with open(self._cookie_file, 'wb') as f:
+                    pickle.dump(session.cookies, f)
+                    _LOGGER.debug("Saved cookies for future use")
+            except Exception as e:
+                _LOGGER.warning("Could not save cookies: %s", e)
+            
+            # Wait like a human (random delay between 2-4 seconds)
+            wait_time = random.uniform(2, 4)
+            _LOGGER.debug("Waiting %.1f seconds before navigating to pricing page...", wait_time)
+            time.sleep(wait_time)
+            
+            # Step 2: Navigate to target page
+            _LOGGER.info("Navigating to pricing page...")
+            session.headers['Referer'] = base_url
+            session.headers['Sec-Fetch-Site'] = 'same-origin'
+            
+            resp2 = session.get(self._url, timeout=30, verify=False, allow_redirects=True)
+            _LOGGER.debug("Pricing page status: %d, length: %d", resp2.status_code, len(resp2.text))
+            
+            if resp2.status_code == 200:
+                if 'data-invoice-id' in resp2.text:
+                    _LOGGER.info("Successfully retrieved data with session persistence method")
+                    return resp2
+                else:
+                    # If we got a challenge, wait and retry once
+                    if 'incapsula' in resp2.text.lower() and '_Incapsula_Resource' in resp2.text:
+                        _LOGGER.info("Incapsula challenge detected, retrying after delay...")
+                        time.sleep(5)
+                        
+                        resp3 = session.get(self._url, timeout=30, verify=False)
+                        if 'data-invoice-id' in resp3.text:
+                            _LOGGER.info("Successfully retrieved data on retry")
+                            return resp3
+                    
+                    _LOGGER.error("No invoice data found in response")
+                    return None
+            else:
+                _LOGGER.error("Failed to fetch data. Status code: %d", resp2.status_code)
+                return None
+                
+        except Exception as e:
+            _LOGGER.error("Error during fetch: %s", e)
+            return None
+
+    def update(self):
+        """Update sensor data"""
+        _LOGGER.info("Starting update for RAE Price sensor")
         final_price = None
         found_month = None
 
         try:
-            _LOGGER.info("Fetching data from RAE website: %s", self._url)
-            response = requests.get(self._url, verify=False)
-            response.encoding = 'utf-8'
-
-            if response.status_code == 200:
-                _LOGGER.info("Successfully retrieved data from RAE website")
+            # Fetch data using session persistence method
+            response = self._fetch_with_session_persistence()
+            
+            if response and response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 rows = soup.find_all('tr', attrs={'data-invoice-id': True})
                 data = []
@@ -137,6 +240,11 @@ class RAEPriceSensor(Entity):
 
                 _LOGGER.info("Successfully parsed %d rows", len(data))
 
+                if len(data) == 0:
+                    _LOGGER.error("No data rows found. The website might have changed.")
+                    return
+
+                # Search for price in recent months
                 current_date = datetime.datetime.now()
                 search_date = current_date
                 max_attempts = 12
@@ -144,7 +252,7 @@ class RAEPriceSensor(Entity):
 
                 while attempts < max_attempts and final_price is None:
                     month_filter = str(search_date.month)
-                    _LOGGER.info("Searching for price in month %s (attempt %d/%d)",
+                    _LOGGER.debug("Searching for price in month %s (attempt %d/%d)",
                                  month_filter, attempts + 1, max_attempts)
                     
                     final_price, found_month = self._search_price_in_data(data, month_filter)
@@ -164,12 +272,8 @@ class RAEPriceSensor(Entity):
                 else:
                     _LOGGER.warning("No price found in the last %d months", max_attempts)
             else:
-                _LOGGER.error("Failed to fetch data. Status code: %d", response.status_code)
+                _LOGGER.error("Failed to fetch data from RAE website")
 
-        except requests.ConnectionError as e:
-            _LOGGER.error("Connection error while fetching RAE data: %s", e)
-        except requests.RequestException as e:
-            _LOGGER.error("Request error while fetching RAE data: %s", e)
         except Exception as e:
             _LOGGER.error("Unexpected error while fetching RAE data: %s", e, exc_info=True)
 
