@@ -76,6 +76,8 @@ async def async_setup_entry(
 
 
 class RAEPriceSensor(SensorEntity):
+    _attr_icon = "mdi:flash"
+
     def __init__(self, provider, plan, url, discounted):
         self._provider = provider
         self._plan = plan

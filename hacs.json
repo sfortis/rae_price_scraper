@@ -1,5 +1,5 @@
 {
-  "name": "RAE Power Price Scraper",
+  "name": "RAE Electricity Price",
   "homeassistant": "2024.11.0",
   "render_readme": true
 }

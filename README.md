@@ -1,4 +1,4 @@
-# RAE Power Price Scraper for Home Assistant
+# RAE Electricity Price for Home Assistant
 
 A custom Home Assistant integration that exposes a Greek electricity tariff from
 the RAE / RAAEY registry ([energycost.gr](https://energycost.gr)) as a sensor
@@ -14,7 +14,7 @@ integration works out of the box without any extra setup on your side.
 ### HACS (recommended)
 
 1. Add this repository as a custom repository in HACS (category: Integration).
-2. Install **RAE Power Price Scraper**.
+2. Install **RAE Electricity Price**.
 3. Restart Home Assistant.
 
 ### Manual
@@ -28,7 +28,7 @@ integration works out of the box without any extra setup on your side.
 Configuration is done entirely from the UI (no YAML):
 
 1. Go to **Settings > Devices & Services > Add Integration**.
-2. Search for **RAE Power Price Scraper**.
+2. Search for **RAE Electricity Price**.
 3. Fill in:
    - **Provider**: exactly as listed on the registry, e.g. `ΔΕΗ`.
    - **Plan name**: exactly as listed, **without** the trailing month-version.

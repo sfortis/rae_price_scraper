@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "RAE Power Price Scraper",
+        "title": "RAE Electricity Price",
         "description": "Track an electricity tariff from the RAE registry (energycost.gr). Enter the provider and plan exactly as shown on the registry. For the plan, omit any trailing month-version such as \"06.26\" (type \"My Home Online\", not \"My Home Online 06.26\") so it keeps working when the provider bumps that version.",
         "data": {
           "provider_filter": "Provider",
