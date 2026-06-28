@@ -1,0 +1,5 @@
+{
+  "name": "RAE Power Price Scraper",
+  "homeassistant": "2024.11.0",
+  "render_readme": true
+}
