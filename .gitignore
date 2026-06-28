@@ -3,3 +3,8 @@
 
 # But keep README.md
 !README.md
+
+# Local tooling / build artifacts
+.claude/
+__pycache__/
+*.pyc

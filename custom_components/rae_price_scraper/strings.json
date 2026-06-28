@@ -1,0 +1,60 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "RAE Power Price Scraper",
+        "description": "Track an electricity tariff from the RAE registry (energycost.gr). Enter the provider and plan exactly as shown on the registry. For the plan, omit any trailing month-version such as \"06.26\" (type \"My Home Online\", not \"My Home Online 06.26\") so it keeps working when the provider bumps that version.",
+        "data": {
+          "provider_filter": "Provider",
+          "plan_filter": "Plan name",
+          "discounted_price": "Use discounted price",
+          "url": "Data feed URL (advanced)"
+        },
+        "data_description": {
+          "provider_filter": "Exactly as listed on the RAE registry, e.g. ΔΕΗ.",
+          "plan_filter": "Exactly as listed, WITHOUT the trailing month-version. e.g. My Home Online (not My Home Online 06.26).",
+          "discounted_price": "Use the discounted price (with conditions) instead of the standard price.",
+          "url": "Leave empty to use the default public data feed."
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure RAE sensor",
+        "description": "Enter the plan exactly as on the RAE registry, omitting any trailing month-version such as \"06.26\".",
+        "data": {
+          "provider_filter": "Provider",
+          "plan_filter": "Plan name",
+          "discounted_price": "Use discounted price",
+          "url": "Data feed URL (advanced)"
+        },
+        "data_description": {
+          "provider_filter": "Exactly as listed on the RAE registry, e.g. ΔΕΗ.",
+          "plan_filter": "Exactly as listed, WITHOUT the trailing month-version. e.g. My Home Online (not My Home Online 06.26).",
+          "discounted_price": "Use the discounted price (with conditions) instead of the standard price.",
+          "url": "Leave empty to use the default public data feed."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This provider/plan is already configured.",
+      "unique_id_mismatch": "The provider/plan does not match the entry being reconfigured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "RAE sensor options",
+        "description": "Enter the plan exactly as on the RAE registry, omitting any trailing month-version such as \"06.26\".",
+        "data": {
+          "plan_filter": "Plan name",
+          "discounted_price": "Use discounted price",
+          "url": "Data feed URL (advanced)"
+        },
+        "data_description": {
+          "plan_filter": "Exactly as listed, WITHOUT the trailing month-version. e.g. My Home Online (not My Home Online 06.26).",
+          "discounted_price": "Use the discounted price (with conditions) instead of the standard price.",
+          "url": "Leave empty to use the default public data feed."
+        }
+      }
+    }
+  }
+}

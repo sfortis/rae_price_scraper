@@ -1,34 +1,61 @@
-# RAE Price Scraper for Home Assistant
+# RAE Power Price Scraper for Home Assistant
 
-This custom Home Assistant sensor component scrapes electricity prices from the RAE (Regulatory Authority for Energy) website (https://energycost.gr) and provides the price as a sensor in Home Assistant.
+A custom Home Assistant integration that exposes a Greek electricity tariff from
+the RAE / RAAEY registry ([energycost.gr](https://energycost.gr)) as a sensor
+(`sensor.rae_price_per_kwh`, in EUR/kWh).
 
-## Features
+## How it works
 
-- Fetches the latest electricity price per kWh in EUR from RAE.
-- Configurable provider and plan filters.
-- Configurable scraping URL.
+The tariff data is read from a maintained endpoint on our own server, so the
+integration works out of the box without any extra setup on your side.
 
 ## Installation
 
-1. **Clone or Download**: Clone this repository into your Home Assistant's `custom_components` directory or download the zip file and extract the `rae_price_scraper` folder into the `custom_components` directory.
-2. **Restart Home Assistant**
-3. **Configuration**: Add the sensor configuration to your `configuration.yaml` file with the necessary parameters.
-4. **Restart Home Assistant**: Restart your Home Assistant instance to pick up the new sensor.
+### HACS (recommended)
+
+1. Add this repository as a custom repository in HACS (category: Integration).
+2. Install **RAE Power Price Scraper**.
+3. Restart Home Assistant.
+
+### Manual
+
+1. Copy the `custom_components/rae_price_scraper` folder into your Home
+   Assistant `config/custom_components` directory.
+2. Restart Home Assistant.
 
 ## Configuration
 
-Add the following to your `configuration.yaml` file:
+Configuration is done entirely from the UI (no YAML):
 
-```yaml
-sensor:
-  - platform: rae_price_scraper
-    provider_filter: "ΔΕΗ"
-    plan_filter: "My Home Online"
-    url: "https://energycost.gr/%ce%ba%ce%b1%cf%84%ce%b1%cf%87%cf%89%cf%81%ce%b7%ce%bc%ce%ad%ce%bd%ce%b1-%cf%84%ce%b9%ce%bc%ce%bf%ce%bb%cf%8c%ce%b3%ce%b9%ce%b1-%cf%80%cf%81%ce%bf%ce%bc%ce%ae%ce%b8%ce%b5%ce%b9%ce%b1%cf%82-%ce%b7-3/"
-    discounted_price: "Y"
-    scan_interval: 86400
-```
+1. Go to **Settings > Devices & Services > Add Integration**.
+2. Search for **RAE Power Price Scraper**.
+3. Fill in:
+   - **Provider**: exactly as listed on the registry, e.g. `ΔΕΗ`.
+   - **Plan name**: exactly as listed, **without** the trailing month-version.
+     The registry shows plans like `My Home Online 06.26`; enter just
+     `My Home Online`. The integration matches the plan exactly while ignoring
+     that `MM.YY` version, so your sensor keeps working when the provider bumps
+     it (e.g. to `07.26`).
+   - **Use discounted price**: use the discounted (with-conditions) price
+     instead of the standard one.
 
-## Usage
+You can change any of these later with **Reconfigure** (or the **Configure**
+options dialog) on the integration entry.
 
-Once configured and Home Assistant has been restarted, the sensor will appear in your Home Assistant instance as sensor.rae_price_per_kwh. It will update once every day by default, but you can modify the scan_interval to change the update frequency.
+### Migrating from the old YAML setup
+
+Older versions used a `sensor:` platform in `configuration.yaml`. On upgrade,
+an existing YAML entry is **imported automatically** into a config entry on the
+next restart. After confirming the entity still works, remove the old
+`rae_price_scraper` block from `configuration.yaml`.
+
+## The sensor
+
+- **Entity**: `sensor.rae_price_per_kwh`
+- **Unit**: `EUR/kWh`
+- **Polling**: every 12 hours
+- **Attributes**: `provider`, `plan`, `discounted_price`, `last_found_month`,
+  `last_update`
+
+If the current month's tariff is not found, the integration searches back up to
+12 months so the sensor still reports the most recent applicable price.
