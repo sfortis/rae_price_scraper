@@ -1,7 +1,10 @@
-"""RAE electricity price sensor.
+"""RAE electricity price sensors.
 
-Reads a Greek electricity tariff from a maintained JSON endpoint and exposes it
-as sensor.rae_price_per_kwh.
+Reads a Greek electricity tariff from a maintained JSON endpoint and exposes:
+- sensor.rae_price_per_kwh : the selected provider/plan price (EUR/kWh)
+- sensor.rae_last_updated  : when the feed was last refreshed (timestamp)
+
+A single DataUpdateCoordinator fetches the feed once and both sensors read it.
 """
 
 import datetime
@@ -12,11 +15,20 @@ from datetime import timedelta
 import requests
 import voluptuous as vol
 
-from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
+from homeassistant.components.sensor import (
+    PLATFORM_SCHEMA,
+    SensorDeviceClass,
+    SensorEntity,
+)
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
 
 from .const import (
     ACCESS_TOKEN,
@@ -32,7 +44,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-SCAN_INTERVAL = timedelta(hours=12)
+UPDATE_INTERVAL = timedelta(hours=12)
 
 # The website appends a publication-version suffix to plan names, e.g.
 # "My Home Online" is published as "My Home Online 06.26". We strip a trailing
@@ -59,101 +71,52 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     )
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up the sensor from a config entry."""
-    cfg = {**entry.data, **entry.options}
-    sensor = RAEPriceSensor(
-        provider=cfg[CONF_PROVIDER],
-        plan=cfg[CONF_PLAN],
-        url=cfg.get(CONF_URL) or DEFAULT_URL,
-        discounted=bool(cfg.get(CONF_DISCOUNTED, True)),
-    )
-    async_add_entities([sensor], update_before_add=True)
+def _previous_month(d):
+    if d.month == 1:
+        return d.replace(year=d.year - 1, month=12, day=1)
+    return d.replace(month=d.month - 1, day=1)
 
 
-class RAEPriceSensor(SensorEntity):
-    _attr_icon = "mdi:flash"
+def _plan_matches(row_plan, plan):
+    """Exact match against the configured plan, ignoring the version suffix."""
+    if not row_plan:
+        return False
+    base = _PLAN_VERSION_SUFFIX.sub("", row_plan).strip()
+    return base == plan or row_plan == plan
 
-    def __init__(self, provider, plan, url, discounted):
-        self._provider = provider
-        self._plan = plan
-        self._url = url
-        self._discounted = discounted
-        self._state = None
-        self._initialized = False
-        self._last_found_month = None
 
-    @property
-    def name(self):
-        return 'rae_price_per_kwh'
-
-    @property
-    def unique_id(self):
-        """Stable unique ID so the entity is manageable from the UI."""
-        suffix = "y" if self._discounted else "n"
-        raw = f"rae_price_{self._provider}_{self._plan}_{suffix}"
-        return raw.lower().replace(" ", "_")
-
-    @property
-    def native_value(self):
-        return self._state
-
-    @property
-    def native_unit_of_measurement(self):
-        return "EUR/kWh"
-
-    @property
-    def extra_state_attributes(self):
-        return {
-            'last_found_month': self._last_found_month,
-            'provider': self._provider,
-            'plan': self._plan,
-            'discounted_price': "Y" if self._discounted else "N",
-            'last_update': datetime.datetime.now().isoformat(),
-        }
-
-    def _get_previous_month(self, current_date):
-        if current_date.month == 1:
-            return current_date.replace(year=current_date.year - 1, month=12, day=1)
-        return current_date.replace(month=current_date.month - 1, day=1)
-
-    def _plan_matches(self, row_plan):
-        """Exact match against the configured plan, ignoring the version suffix.
-
-        The row's plan name carries a trailing " MM.YY" version (e.g.
-        "My Home Online 06.26"); we strip it and compare exactly, so
-        "My Home Online" matches but "My Home Online Plus" does not. A user who
-        types the full versioned name still matches via the raw comparison.
-        """
-        if not row_plan:
-            return False
-        base = _PLAN_VERSION_SUFFIX.sub("", row_plan).strip()
-        return base == self._plan or row_plan == self._plan
-
-    def _search_price_in_data(self, data, month_filter):
-        for item in data:
-            if (item.get("provider") == self._provider and
-                    item.get("month") == month_filter and
-                    self._plan_matches(item.get("plan"))):
-
-                raw_price = item.get("price_on") if self._discounted else item.get("price_off")
+def _find_price(rows, provider, plan, discounted):
+    """Return (price, month) for the most recent matching month, else (None, None)."""
+    search_date = datetime.datetime.now()
+    for _ in range(12):
+        month_filter = str(search_date.month)
+        for item in rows:
+            if (item.get("provider") == provider
+                    and item.get("month") == month_filter
+                    and _plan_matches(item.get("plan"), plan)):
+                raw = item.get("price_on") if discounted else item.get("price_off")
                 try:
-                    price = float(raw_price)
-                    _LOGGER.info("Found price %.5f EUR/kWh for month %s", price, month_filter)
-                    return price, int(month_filter)
-                except (ValueError, TypeError) as e:
-                    _LOGGER.error("Error converting price value: %s. Raw value: %s",
-                                  e, raw_price)
+                    return float(raw), int(month_filter)
+                except (ValueError, TypeError):
+                    _LOGGER.error("Could not parse price value: %s", raw)
+        search_date = _previous_month(search_date)
+    return None, None
 
-        _LOGGER.debug("No price found for month %s", month_filter)
-        return None, None
 
-    def _fetch_data(self):
-        """Fetch the published JSON payload and return the list of rows."""
+class RAEDataCoordinator(DataUpdateCoordinator):
+    """Fetches the JSON feed once for all sensors of an entry."""
+
+    def __init__(self, hass: HomeAssistant, url: str):
+        super().__init__(
+            hass, _LOGGER, name="RAE electricity price feed",
+            update_interval=UPDATE_INTERVAL,
+        )
+        self._url = url
+
+    async def _async_update_data(self):
+        return await self.hass.async_add_executor_job(self._fetch)
+
+    def _fetch(self):
         try:
             resp = requests.get(
                 self._url,
@@ -167,58 +130,100 @@ class RAEPriceSensor(SensorEntity):
             resp.raise_for_status()
             payload = resp.json()
         except Exception as e:
-            _LOGGER.error("Error fetching RAE data from %s: %s", self._url, e)
-            return None
+            raise UpdateFailed(f"Error fetching RAE feed: {e}") from e
 
         rows = payload.get("rows")
         if not isinstance(rows, list) or not rows:
-            _LOGGER.error("RAE data payload has no rows (updated_utc=%s)",
-                          payload.get("updated_utc"))
+            raise UpdateFailed("RAE feed contains no rows")
+        return payload
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the sensors from a config entry."""
+    cfg = {**entry.data, **entry.options}
+    coordinator = RAEDataCoordinator(hass, cfg.get(CONF_URL) or DEFAULT_URL)
+    await coordinator.async_config_entry_first_refresh()
+
+    provider = cfg[CONF_PROVIDER]
+    plan = cfg[CONF_PLAN]
+    discounted = bool(cfg.get(CONF_DISCOUNTED, True))
+
+    async_add_entities([
+        RAEPriceSensor(coordinator, provider, plan, discounted),
+        RAELastUpdatedSensor(coordinator, provider, plan, discounted),
+    ])
+
+
+class _RAEBaseEntity(CoordinatorEntity):
+    def __init__(self, coordinator, provider, plan, discounted):
+        super().__init__(coordinator)
+        self._provider = provider
+        self._plan = plan
+        self._discounted = discounted
+
+    def _suffix(self):
+        return "y" if self._discounted else "n"
+
+
+class RAEPriceSensor(_RAEBaseEntity, SensorEntity):
+    _attr_icon = "mdi:flash"
+    _attr_native_unit_of_measurement = "EUR/kWh"
+
+    @property
+    def name(self):
+        return 'rae_price_per_kwh'
+
+    @property
+    def unique_id(self):
+        raw = f"rae_price_{self._provider}_{self._plan}_{self._suffix()}"
+        return raw.lower().replace(" ", "_")
+
+    @property
+    def native_value(self):
+        price, _ = _find_price(
+            self.coordinator.data.get("rows", []),
+            self._provider, self._plan, self._discounted,
+        )
+        return None if price is None else f"{price:.5f}"
+
+    @property
+    def extra_state_attributes(self):
+        _, month = _find_price(
+            self.coordinator.data.get("rows", []),
+            self._provider, self._plan, self._discounted,
+        )
+        return {
+            'last_found_month': month,
+            'provider': self._provider,
+            'plan': self._plan,
+            'discounted_price': "Y" if self._discounted else "N",
+        }
+
+
+class RAELastUpdatedSensor(_RAEBaseEntity, SensorEntity):
+    _attr_icon = "mdi:clock-outline"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    @property
+    def name(self):
+        return 'rae_last_updated'
+
+    @property
+    def unique_id(self):
+        raw = f"rae_last_updated_{self._provider}_{self._plan}_{self._suffix()}"
+        return raw.lower().replace(" ", "_")
+
+    @property
+    def native_value(self):
+        ts = self.coordinator.data.get("updated_utc")
+        if not ts:
             return None
-
-        _LOGGER.info("Fetched %d rows (published %s)",
-                     len(rows), payload.get("updated_utc"))
-        return rows
-
-    def update(self):
-        """Update sensor data."""
-        final_price = None
-        found_month = None
-
         try:
-            data = self._fetch_data()
-
-            if data:
-                current_date = datetime.datetime.now()
-                search_date = current_date
-                max_attempts = 12
-                attempts = 0
-
-                while attempts < max_attempts and final_price is None:
-                    month_filter = str(search_date.month)
-                    final_price, found_month = self._search_price_in_data(data, month_filter)
-                    if final_price is None:
-                        search_date = self._get_previous_month(search_date)
-                        attempts += 1
-                    else:
-                        break
-
-                if final_price is not None:
-                    self._state = f"{final_price:.5f}"
-                    self._initialized = True
-                    self._last_found_month = found_month
-                    _LOGGER.info("Updated RAE price: %.5f EUR/kWh (Month: %d)",
-                                 final_price, found_month)
-                else:
-                    _LOGGER.warning("No price found in the last %d months for "
-                                    "provider=%s plan=%s", max_attempts,
-                                    self._provider, self._plan)
-            else:
-                _LOGGER.error("Failed to fetch data from RAE JSON endpoint")
-
-        except Exception as e:
-            _LOGGER.error("Unexpected error while fetching RAE data: %s", e, exc_info=True)
-
-        if not self._initialized and self._state is None:
-            self._state = 'Unavailable'
-            _LOGGER.warning("Sensor remains uninitialized, setting state to 'Unavailable'")
+            return datetime.datetime.fromisoformat(ts)
+        except ValueError:
+            _LOGGER.error("Could not parse updated_utc: %s", ts)
+            return None
