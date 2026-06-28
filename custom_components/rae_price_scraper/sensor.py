@@ -23,6 +23,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -151,31 +152,42 @@ async def async_setup_entry(
     provider = cfg[CONF_PROVIDER]
     plan = cfg[CONF_PLAN]
     discounted = bool(cfg.get(CONF_DISCOUNTED, True))
+    device_name = entry.title or f"RAE {provider} - {plan}"
 
     async_add_entities([
-        RAEPriceSensor(coordinator, provider, plan, discounted),
-        RAELastUpdatedSensor(coordinator, provider, plan, discounted),
+        RAEPriceSensor(coordinator, provider, plan, discounted, entry.entry_id, device_name),
+        RAELastUpdatedSensor(coordinator, provider, plan, discounted, entry.entry_id, device_name),
     ])
 
 
 class _RAEBaseEntity(CoordinatorEntity):
-    def __init__(self, coordinator, provider, plan, discounted):
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, provider, plan, discounted, entry_id, device_name):
         super().__init__(coordinator)
         self._provider = provider
         self._plan = plan
         self._discounted = discounted
+        self._entry_id = entry_id
+        self._device_name = device_name
 
     def _suffix(self):
         return "y" if self._discounted else "n"
+
+    @property
+    def device_info(self):
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry_id)},
+            name=self._device_name,
+            manufacturer="RAE / RAAEY",
+            model="Electricity tariff",
+        )
 
 
 class RAEPriceSensor(_RAEBaseEntity, SensorEntity):
     _attr_icon = "mdi:flash"
     _attr_native_unit_of_measurement = "EUR/kWh"
-
-    @property
-    def name(self):
-        return 'rae_price_per_kwh'
+    _attr_name = "Price"
 
     @property
     def unique_id(self):
@@ -207,10 +219,7 @@ class RAEPriceSensor(_RAEBaseEntity, SensorEntity):
 class RAELastUpdatedSensor(_RAEBaseEntity, SensorEntity):
     _attr_icon = "mdi:clock-outline"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
-
-    @property
-    def name(self):
-        return 'rae_last_updated'
+    _attr_name = "Last updated"
 
     @property
     def unique_id(self):
