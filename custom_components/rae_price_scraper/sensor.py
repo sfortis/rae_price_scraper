@@ -1,10 +1,11 @@
 """RAE electricity price sensors.
 
 Reads a Greek electricity tariff from a maintained JSON endpoint and exposes:
-- sensor.rae_price_per_kwh : the selected provider/plan price (EUR/kWh)
+- sensor.rae_price_per_kwh : single-zone (monozoniki) price (EUR/kWh)
+- a dual-zone (time-of-use) price sensor, only for plans that have one
 - sensor.rae_last_updated  : when the feed was last refreshed (timestamp)
 
-A single DataUpdateCoordinator fetches the feed once and both sensors read it.
+A single DataUpdateCoordinator fetches the feed once and all sensors read it.
 """
 
 import datetime
@@ -49,8 +50,7 @@ UPDATE_INTERVAL = timedelta(hours=12)
 
 # The website appends a publication-version suffix to plan names, e.g.
 # "My Home Online" is published as "My Home Online 06.26". We strip a trailing
-# " MM.YY" so the configured plan can be matched exactly without breaking each
-# time the provider bumps that version.
+# " MM.YY" so the configured plan can be matched exactly across version bumps.
 _PLAN_VERSION_SUFFIX = re.compile(r"\s+\d{2}\.\d{2}$")
 
 # Legacy YAML schema, kept only to migrate existing configs into a config entry.
@@ -63,8 +63,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Import a legacy YAML platform config into a config entry (then it can be
-    removed from configuration.yaml)."""
+    """Import a legacy YAML platform config into a config entry."""
     hass.async_create_task(
         hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_IMPORT}, data=dict(config)
@@ -86,8 +85,8 @@ def _plan_matches(row_plan, plan):
     return base == plan or row_plan == plan
 
 
-def _find_price(rows, provider, plan, discounted):
-    """Return (price, month) for the most recent matching month, else (None, None)."""
+def _find_row(rows, provider, plan):
+    """Return (row, month) for the most recent matching month, else (None, None)."""
     search_date = datetime.datetime.now()
     for _ in range(12):
         month_filter = str(search_date.month)
@@ -95,13 +94,16 @@ def _find_price(rows, provider, plan, discounted):
             if (item.get("provider") == provider
                     and item.get("month") == month_filter
                     and _plan_matches(item.get("plan"), plan)):
-                raw = item.get("price_on") if discounted else item.get("price_off")
-                try:
-                    return float(raw), int(month_filter)
-                except (ValueError, TypeError):
-                    _LOGGER.error("Could not parse price value: %s", raw)
+                return item, int(month_filter)
         search_date = _previous_month(search_date)
     return None, None
+
+
+def _as_price(raw):
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 class RAEDataCoordinator(DataUpdateCoordinator):
@@ -153,11 +155,19 @@ async def async_setup_entry(
     plan = cfg[CONF_PLAN]
     discounted = bool(cfg.get(CONF_DISCOUNTED, True))
     device_name = entry.title or f"RAE {provider} - {plan}"
+    ids = (entry.entry_id, device_name)
 
-    async_add_entities([
-        RAEPriceSensor(coordinator, provider, plan, discounted, entry.entry_id, device_name),
-        RAELastUpdatedSensor(coordinator, provider, plan, discounted, entry.entry_id, device_name),
-    ])
+    entities = [
+        RAEPriceSensor(coordinator, provider, plan, discounted, *ids),
+        RAELastUpdatedSensor(coordinator, provider, plan, discounted, *ids),
+    ]
+
+    # Add the dual-zone (time-of-use) price sensor only if this plan has one.
+    row, _ = _find_row(coordinator.data.get("rows", []), provider, plan)
+    if row and (row.get("price_off_dual") or row.get("price_on_dual")):
+        entities.append(RAEDualPriceSensor(coordinator, provider, plan, discounted, *ids))
+
+    async_add_entities(entities)
 
 
 class _RAEBaseEntity(CoordinatorEntity):
@@ -184,36 +194,60 @@ class _RAEBaseEntity(CoordinatorEntity):
         )
 
 
-class RAEPriceSensor(_RAEBaseEntity, SensorEntity):
+class _RAEPriceBase(_RAEBaseEntity, SensorEntity):
     _attr_icon = "mdi:flash"
     _attr_native_unit_of_measurement = "EUR/kWh"
-    _attr_name = "Price"
 
-    @property
-    def unique_id(self):
-        raw = f"rae_price_{self._provider}_{self._plan}_{self._suffix()}"
-        return raw.lower().replace(" ", "_")
+    # Overridden per zone.
+    _field_off = "price_off"
+    _field_on = "price_on"
 
     @property
     def native_value(self):
-        price, _ = _find_price(
-            self.coordinator.data.get("rows", []),
-            self._provider, self._plan, self._discounted,
-        )
+        row, _ = _find_row(self.coordinator.data.get("rows", []),
+                           self._provider, self._plan)
+        if not row:
+            return None
+        price = _as_price(row.get(self._field_on if self._discounted
+                                  else self._field_off))
         return None if price is None else f"{price:.5f}"
 
     @property
     def extra_state_attributes(self):
-        _, month = _find_price(
-            self.coordinator.data.get("rows", []),
-            self._provider, self._plan, self._discounted,
-        )
+        _, month = _find_row(self.coordinator.data.get("rows", []),
+                             self._provider, self._plan)
         return {
             'last_found_month': month,
             'provider': self._provider,
             'plan': self._plan,
             'discounted_price': "Y" if self._discounted else "N",
         }
+
+
+class RAEPriceSensor(_RAEPriceBase):
+    """Single-zone (monozoniki) price. Keeps the historical entity_id."""
+
+    _attr_name = "Single-zone price"
+    _field_off = "price_off"
+    _field_on = "price_on"
+
+    @property
+    def unique_id(self):
+        raw = f"rae_price_{self._provider}_{self._plan}_{self._suffix()}"
+        return raw.lower().replace(" ", "_")
+
+
+class RAEDualPriceSensor(_RAEPriceBase):
+    """Dual-zone (time-of-use) price."""
+
+    _attr_name = "Dual-zone price"
+    _field_off = "price_off_dual"
+    _field_on = "price_on_dual"
+
+    @property
+    def unique_id(self):
+        raw = f"rae_price_dual_{self._provider}_{self._plan}_{self._suffix()}"
+        return raw.lower().replace(" ", "_")
 
 
 class RAELastUpdatedSensor(_RAEBaseEntity, SensorEntity):
