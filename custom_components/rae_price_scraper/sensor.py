@@ -13,7 +13,6 @@ import logging
 import re
 from datetime import timedelta
 
-import requests
 import voluptuous as vol
 
 from homeassistant.components.sensor import (
@@ -43,6 +42,7 @@ from .const import (
     REQUEST_TIMEOUT,
     USER_AGENT,
 )
+from .feed import fetch_feed
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -121,23 +121,18 @@ class RAEDataCoordinator(DataUpdateCoordinator):
 
     def _fetch(self):
         try:
-            resp = requests.get(
+            payload = fetch_feed(
                 self._url,
                 headers={
-                    'User-Agent': USER_AGENT,
-                    'Accept': 'application/json',
-                    'X-Access-Token': ACCESS_TOKEN,
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json",
+                    "X-Access-Token": ACCESS_TOKEN,
                 },
                 timeout=REQUEST_TIMEOUT,
             )
-            resp.raise_for_status()
-            payload = resp.json()
         except Exception as e:
             raise UpdateFailed(f"Error fetching RAE feed: {e}") from e
 
-        rows = payload.get("rows")
-        if not isinstance(rows, list) or not rows:
-            raise UpdateFailed("RAE feed contains no rows")
         return payload
 
 
