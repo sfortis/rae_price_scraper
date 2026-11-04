@@ -63,3 +63,10 @@ sensors expose `provider`, `plan`, `discounted_price`, `matched_period`,
 
 If the current month's tariff is not found, the integration searches back up to
 12 months so the sensors still report the most recent applicable price.
+
+## Tests
+
+Install the `requests` package. Run `python -m unittest discover -s tests`.
+
+The feed reader rejects HTTP redirects and decoded responses larger than 10 MiB.
+A custom feed URL must point directly to the JSON feed without redirects.
