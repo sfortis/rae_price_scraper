@@ -1,8 +1,8 @@
 # RAE Electricity Price for Home Assistant
 
 A custom Home Assistant integration that exposes a Greek electricity tariff from
-the RAE / RAAEY registry ([energycost.gr](https://energycost.gr)) as a sensor
-(`sensor.rae_price_per_kwh`, in EUR/kWh).
+the RAE / RAAEY registry ([energycost.gr](https://energycost.gr)) as sensors in
+EUR/kWh (single-zone, tiered, or day/night depending on the plan).
 
 ## How it works
 
@@ -29,33 +29,66 @@ Configuration is done entirely from the UI (no YAML):
 
 1. Go to **Settings > Devices & Services > Add Integration**.
 2. Search for **RAE Electricity Price**.
-3. Fill in:
-   - **Provider**: exactly as listed on the registry, e.g. `ΔΕΗ`.
-   - **Plan name**: exactly as listed, **without** the trailing month-version.
-     The registry shows plans like `My Home Online 06.26`; enter just
-     `My Home Online`. The integration matches the plan exactly while ignoring
-     that `MM.YY` version, so your sensor keeps working when the provider bumps
-     it (e.g. to `07.26`).
-   - **Use discounted price**: use the discounted (with-conditions) price
-     instead of the standard one.
+3. Choose the **Tariff category**: household or business.
+4. Choose the **Provider** from the list. The list comes from the tariff feed,
+   so Home Assistant needs internet access during setup.
+5. Choose the **Plan** from the provider's plans. Each plan shows its current
+   standard price and, when different, its discounted price. Also choose
+   whether to **Use discounted price** for the main sensor (the price with
+   conditions instead of the standard one).
+   - The registry publishes plans with a month-version, such as
+     `My Home Online 06.26`. The list shows the name without it, and the
+     integration matches that name, so the sensor keeps working when the
+     provider bumps the version (e.g. to `07.26`).
+   - Plans that are no longer sold are marked **withdrawn**, and plans missing
+     from the newest registry month are marked **last listed MM/YYYY**. They
+     stay selectable because an existing customer may still be on them.
 
-You can change any of these later with **Reconfigure** (or the **Configure**
-options dialog) on the integration entry.
+Minimum Home Assistant version: 2025.11.0.
 
-### Migrating from the old YAML setup
+You can change any of these later with **Reconfigure** on the integration
+entry. Versions before 0.12.0 also had a **Configure** options dialog; the
+settings it saved are moved into the entry automatically on upgrade.
 
-Older versions used a `sensor:` platform in `configuration.yaml`. On upgrade,
-an existing YAML entry is **imported automatically** into a config entry on the
-next restart. After confirming the entity still works, remove the old
-`rae_price_scraper` block from `configuration.yaml`.
+## The sensors
 
-## The sensor
+The entities created depend on the matched plan (all in `EUR/kWh`, polled every
+12 hours).
 
-- **Entity**: `sensor.rae_price_per_kwh`
-- **Unit**: `EUR/kWh`
-- **Polling**: every 12 hours
-- **Attributes**: `provider`, `plan`, `discounted_price`, `last_found_month`,
-  `last_update`
+`sensor.rae_price_single` is the sensor to use in the Energy dashboard. Its
+entity id stays the same when you reconfigure the integration to another plan,
+and it shows the standard or the discounted price as configured. Two more
+sensors always show both prices of the same plan:
+`sensor.rae_price_standard` and `sensor.rae_price_discounted`.
+
+The remaining price sensors depend on the type of plan, and they follow the
+discount setting:
+
+- **Flat plan**: `sensor.rae_price_single` (single-zone price), plus
+  `sensor.rae_price_dual` if the plan also carries a static time-of-use price.
+- **Tiered plan** (different price per consumption band): `sensor.rae_price_single`
+  holds the average across tiers (unknown while a tier price is not
+  published), plus `sensor.rae_price_tier1`,
+  `sensor.rae_price_tier2`, ... for each band.
+- **Day/night plan**: `sensor.rae_price_single` holds the average, plus
+  `sensor.rae_price_day` and `sensor.rae_price_night`.
+
+Always created: `sensor.rae_price_period` (the registry month the price refers
+to, as `MM/YYYY`) and `sensor.rae_last_updated` (feed refresh timestamp). Price
+sensors expose `provider`, `plan`, `segment`, `discounted_price`,
+`matched_period`, `product_kind` and `available` as attributes.
+
+When the registry changes the structure of a plan (for example from a single
+price to consumption tiers), the integration reloads itself and adds or removes
+the tier, day/night and dual-zone sensors to match.
 
 If the current month's tariff is not found, the integration searches back up to
-12 months so the sensor still reports the most recent applicable price.
+12 months so the sensors still report the most recent applicable price.
+
+## Tests
+
+Install the `requests` package. Run `python -m unittest discover -s tests`.
+
+The feed reader rejects HTTP redirects, decoded responses larger than 10 MiB and
+downloads that take longer than 60 seconds in total.
+A custom feed URL must point directly to the JSON feed without redirects.

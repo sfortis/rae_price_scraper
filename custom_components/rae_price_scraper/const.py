@@ -7,6 +7,13 @@ CONF_PROVIDER = "provider_filter"
 CONF_PLAN = "plan_filter"
 CONF_URL = "url"
 CONF_DISCOUNTED = "discounted_price"
+CONF_SEGMENT = "segment"
+
+# Registry segments. Entries created before segments existed have no
+# CONF_SEGMENT and are household.
+SEGMENT_HOUSEHOLD = "household"
+SEGMENT_BUSINESS = "business"
+SEGMENTS = (SEGMENT_HOUSEHOLD, SEGMENT_BUSINESS)
 
 # Default endpoint that serves the tariff data as JSON. Requests carry a shared
 # access token in the X-Access-Token header and a browser User-Agent.
