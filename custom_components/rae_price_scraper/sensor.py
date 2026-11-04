@@ -29,28 +29,20 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
+from .api import fetch_rae_feed
+from .catalog import plan_base
 from .const import (
-    ACCESS_TOKEN,
     CONF_DISCOUNTED,
     CONF_PLAN,
     CONF_PROVIDER,
     CONF_URL,
     DEFAULT_URL,
     DOMAIN,
-    REQUEST_TIMEOUT,
-    USER_AGENT,
 )
-from .feed import fetch_feed
 
 _LOGGER = logging.getLogger(__name__)
 
 UPDATE_INTERVAL = timedelta(hours=12)
-
-# The website appends a publication-version suffix to plan names, e.g.
-# "My Home Online" is published as "My Home Online 06.26". We strip a trailing
-# " MM.YY" so the configured plan can be matched exactly across version bumps.
-_PLAN_VERSION_SUFFIX = re.compile(r"\s+\d{2}\.\d{2}$")
-
 
 def _previous_month(d):
     if d.month == 1:
@@ -62,8 +54,7 @@ def _plan_matches(row_plan, plan):
     """Exact match against the configured plan, ignoring the version suffix."""
     if not row_plan:
         return False
-    base = _PLAN_VERSION_SUFFIX.sub("", row_plan).strip()
-    return base == plan or row_plan == plan
+    return plan_base(row_plan) == plan or row_plan == plan
 
 
 def _find_members(rows, provider, plan):
@@ -152,19 +143,9 @@ class RAEDataCoordinator(DataUpdateCoordinator):
 
     def _fetch(self):
         try:
-            payload = fetch_feed(
-                self._url,
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "Accept": "application/json",
-                    "X-Access-Token": ACCESS_TOKEN,
-                },
-                timeout=REQUEST_TIMEOUT,
-            )
+            return fetch_rae_feed(self._url)
         except Exception as e:
             raise UpdateFailed(f"Error fetching RAE feed: {e}") from e
-
-        return payload
 
 
 async def async_setup_entry(

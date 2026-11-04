@@ -29,15 +29,19 @@ Configuration is done entirely from the UI (no YAML):
 
 1. Go to **Settings > Devices & Services > Add Integration**.
 2. Search for **RAE Electricity Price**.
-3. Fill in:
-   - **Provider**: exactly as listed on the registry, e.g. `ΔΕΗ`.
-   - **Plan name**: exactly as listed, **without** the trailing month-version.
-     The registry shows plans like `My Home Online 06.26`; enter just
-     `My Home Online`. The integration matches the plan exactly while ignoring
-     that `MM.YY` version, so your sensor keeps working when the provider bumps
-     it (e.g. to `07.26`).
-   - **Use discounted price**: use the discounted (with-conditions) price
-     instead of the standard one.
+3. Choose the **Provider** from the list. The list comes from the tariff feed,
+   so Home Assistant needs internet access during setup.
+4. Choose the **Plan** from the provider's plans, and whether to **Use
+   discounted price** (the price with conditions instead of the standard one).
+   - The registry publishes plans with a month-version, such as
+     `My Home Online 06.26`. The list shows the name without it, and the
+     integration matches that name, so the sensor keeps working when the
+     provider bumps the version (e.g. to `07.26`).
+   - Plans that are no longer sold are marked **withdrawn**, and plans missing
+     from the newest registry month are marked **last listed MM/YYYY**. They
+     stay selectable because an existing customer may still be on them.
+
+Minimum Home Assistant version: 2025.11.0.
 
 You can change any of these later with **Reconfigure** on the integration
 entry. Versions before 0.12.0 also had a **Configure** options dialog; the

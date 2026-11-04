@@ -3,39 +3,48 @@
     "step": {
       "user": {
         "title": "RAE Electricity Price",
-        "description": "Track an electricity tariff from the RAE registry (energycost.gr). Enter the provider and plan exactly as shown on the registry. For the plan, omit any trailing month-version such as \"06.26\" (type \"My Home Online\", not \"My Home Online 06.26\") so it keeps working when the provider bumps that version.",
+        "description": "Track an electricity tariff from the RAE registry (energycost.gr). Choose the provider; the next step lists its plans.",
         "data": {
           "provider_filter": "Provider",
-          "plan_filter": "Plan name",
-          "discounted_price": "Use discounted price",
           "url": "Data feed URL (advanced)"
         },
         "data_description": {
-          "provider_filter": "Exactly as listed on the RAE registry, e.g. ΔΕΗ.",
-          "plan_filter": "Exactly as listed, WITHOUT the trailing month-version. e.g. My Home Online (not My Home Online 06.26).",
-          "discounted_price": "Use the discounted price (with conditions) instead of the standard price.",
-          "url": "Leave empty to use the default public data feed."
+          "provider_filter": "The providers currently listed in the RAE registry.",
+          "url": "Leave the default to use the public data feed. A custom URL must point directly to the JSON feed, without redirects."
         }
       },
       "reconfigure": {
         "title": "Reconfigure RAE sensor",
-        "description": "Enter the plan exactly as on the RAE registry, omitting any trailing month-version such as \"06.26\".",
+        "description": "Track an electricity tariff from the RAE registry (energycost.gr). Choose the provider; the next step lists its plans.",
         "data": {
           "provider_filter": "Provider",
-          "plan_filter": "Plan name",
-          "discounted_price": "Use discounted price",
           "url": "Data feed URL (advanced)"
         },
         "data_description": {
-          "provider_filter": "Exactly as listed on the RAE registry, e.g. ΔΕΗ.",
-          "plan_filter": "Exactly as listed, WITHOUT the trailing month-version. e.g. My Home Online (not My Home Online 06.26).",
-          "discounted_price": "Use the discounted price (with conditions) instead of the standard price.",
-          "url": "Leave empty to use the default public data feed."
+          "provider_filter": "The providers currently listed in the RAE registry.",
+          "url": "Leave the default to use the public data feed. A custom URL must point directly to the JSON feed, without redirects."
+        }
+      },
+      "plan": {
+        "title": "Choose the plan",
+        "description": "Plans of {provider} in the RAE registry. Plans marked \"withdrawn\" are no longer sold, and plans marked \"last listed\" are missing from the newest month; existing customers may still be on them.",
+        "data": {
+          "plan_filter": "Plan",
+          "discounted_price": "Use discounted price"
+        },
+        "data_description": {
+          "plan_filter": "The plan name without its month-version (\"My Home Online\" covers \"My Home Online 06.26\", \"07.26\" and later).",
+          "discounted_price": "Use the discounted price (with conditions) instead of the standard price."
         }
       }
     },
+    "error": {
+      "cannot_connect": "Could not load the tariff feed from this URL.",
+      "unknown_provider": "This provider is not in the tariff feed."
+    },
     "abort": {
-      "already_configured": "This provider/plan is already configured.",
+      "already_configured": "This provider/plan/discount combination is already configured.",
+      "cannot_connect": "Could not load the tariff feed. Try again later.",
       "reconfigure_successful": "The RAE sensor was reconfigured."
     }
   }
