@@ -4,6 +4,7 @@ import gzip
 import importlib.util
 import json
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,6 +37,19 @@ class FeedHandler(BaseHTTPRequestHandler):
             type(self).redirects_followed += 1
         if self.path == "/missing":
             self.send_error(404)
+            return
+        if self.path == "/slow":
+            # Send one byte at a time, each well inside the read timeout.
+            self.send_response(200)
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            try:
+                for _ in range(1000):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            except (BrokenPipeError, ConnectionResetError, ValueError, OSError):
+                pass
             return
         self.send_response(200)
         if self.path == "/large":
@@ -104,6 +118,13 @@ class TestFeed(unittest.TestCase):
         """A rows list with non-object entries is rejected."""
         with self.assertRaisesRegex(ValueError, "nonempty list of objects"):
             feed.fetch_feed(self.base_url + "/invalid", {}, 3)
+
+    def test_slow_download_is_cut_off(self):
+        """A server that drips bytes cannot hold the caller past the limit."""
+        started = time.monotonic()
+        with self.assertRaisesRegex(ValueError, "exceeded"):
+            feed.fetch_feed(self.base_url + "/slow", {}, 3, max_seconds=1)
+        self.assertLess(time.monotonic() - started, 5)
 
     def test_http_failure_is_reported(self):
         """An HTTP error is not mistaken for valid feed data."""

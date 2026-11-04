@@ -72,5 +72,6 @@ If the current month's tariff is not found, the integration searches back up to
 
 Install the `requests` package. Run `python -m unittest discover -s tests`.
 
-The feed reader rejects HTTP redirects and decoded responses larger than 10 MiB.
+The feed reader rejects HTTP redirects, decoded responses larger than 10 MiB and
+downloads that take longer than 60 seconds in total.
 A custom feed URL must point directly to the JSON feed without redirects.
