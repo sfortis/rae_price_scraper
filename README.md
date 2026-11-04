@@ -1,8 +1,8 @@
 # RAE Electricity Price for Home Assistant
 
 A custom Home Assistant integration that exposes a Greek electricity tariff from
-the RAE / RAAEY registry ([energycost.gr](https://energycost.gr)) as a sensor
-(`sensor.rae_price_per_kwh`, in EUR/kWh).
+the RAE / RAAEY registry ([energycost.gr](https://energycost.gr)) as sensors in
+EUR/kWh (single-zone, tiered, or day/night depending on the plan).
 
 ## How it works
 
@@ -39,23 +39,27 @@ Configuration is done entirely from the UI (no YAML):
    - **Use discounted price**: use the discounted (with-conditions) price
      instead of the standard one.
 
-You can change any of these later with **Reconfigure** (or the **Configure**
-options dialog) on the integration entry.
+You can change any of these later with **Reconfigure** on the integration
+entry. Versions before 0.12.0 also had a **Configure** options dialog; the
+settings it saved are moved into the entry automatically on upgrade.
 
-### Migrating from the old YAML setup
+## The sensors
 
-Older versions used a `sensor:` platform in `configuration.yaml`. On upgrade,
-an existing YAML entry is **imported automatically** into a config entry on the
-next restart. After confirming the entity still works, remove the old
-`rae_price_scraper` block from `configuration.yaml`.
+The entities created depend on the matched plan (all in `EUR/kWh`, polled every
+12 hours):
 
-## The sensor
+- **Flat plan**: `sensor.rae_price_single` (single-zone price), plus
+  `sensor.rae_price_dual` if the plan also carries a static time-of-use price.
+- **Tiered plan** (different price per consumption band): `sensor.rae_price_single`
+  holds the average across tiers, plus `sensor.rae_price_tier1`,
+  `sensor.rae_price_tier2`, ... for each band.
+- **Day/night plan**: `sensor.rae_price_single` holds the average, plus
+  `sensor.rae_price_day` and `sensor.rae_price_night`.
 
-- **Entity**: `sensor.rae_price_per_kwh`
-- **Unit**: `EUR/kWh`
-- **Polling**: every 12 hours
-- **Attributes**: `provider`, `plan`, `discounted_price`, `last_found_month`,
-  `last_update`
+Always created: `sensor.rae_price_period` (the registry month the price refers
+to, as `MM/YYYY`) and `sensor.rae_last_updated` (feed refresh timestamp). Price
+sensors expose `provider`, `plan`, `discounted_price`, `matched_period`,
+`product_kind` and `available` as attributes.
 
 If the current month's tariff is not found, the integration searches back up to
-12 months so the sensor still reports the most recent applicable price.
+12 months so the sensors still report the most recent applicable price.

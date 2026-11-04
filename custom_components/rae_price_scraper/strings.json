@@ -36,25 +36,7 @@
     },
     "abort": {
       "already_configured": "This provider/plan is already configured.",
-      "unique_id_mismatch": "The provider/plan does not match the entry being reconfigured."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "RAE sensor options",
-        "description": "Enter the plan exactly as on the RAE registry, omitting any trailing month-version such as \"06.26\".",
-        "data": {
-          "plan_filter": "Plan name",
-          "discounted_price": "Use discounted price",
-          "url": "Data feed URL (advanced)"
-        },
-        "data_description": {
-          "plan_filter": "Exactly as listed, WITHOUT the trailing month-version. e.g. My Home Online (not My Home Online 06.26).",
-          "discounted_price": "Use the discounted price (with conditions) instead of the standard price.",
-          "url": "Leave empty to use the default public data feed."
-        }
-      }
+      "reconfigure_successful": "The RAE sensor was reconfigured."
     }
   }
 }
