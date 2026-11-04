@@ -29,10 +29,13 @@ Configuration is done entirely from the UI (no YAML):
 
 1. Go to **Settings > Devices & Services > Add Integration**.
 2. Search for **RAE Electricity Price**.
-3. Choose the **Provider** from the list. The list comes from the tariff feed,
+3. Choose the **Tariff category**: household or business.
+4. Choose the **Provider** from the list. The list comes from the tariff feed,
    so Home Assistant needs internet access during setup.
-4. Choose the **Plan** from the provider's plans, and whether to **Use
-   discounted price** (the price with conditions instead of the standard one).
+5. Choose the **Plan** from the provider's plans. Each plan shows its current
+   standard price and, when different, its discounted price. Also choose
+   whether to **Use discounted price** for the main sensor (the price with
+   conditions instead of the standard one).
    - The registry publishes plans with a month-version, such as
      `My Home Online 06.26`. The list shows the name without it, and the
      integration matches that name, so the sensor keeps working when the
@@ -50,20 +53,34 @@ settings it saved are moved into the entry automatically on upgrade.
 ## The sensors
 
 The entities created depend on the matched plan (all in `EUR/kWh`, polled every
-12 hours):
+12 hours).
+
+`sensor.rae_price_single` is the sensor to use in the Energy dashboard. Its
+entity id stays the same when you reconfigure the integration to another plan,
+and it shows the standard or the discounted price as configured. Two more
+sensors always show both prices of the same plan:
+`sensor.rae_price_standard` and `sensor.rae_price_discounted`.
+
+The remaining price sensors depend on the type of plan, and they follow the
+discount setting:
 
 - **Flat plan**: `sensor.rae_price_single` (single-zone price), plus
   `sensor.rae_price_dual` if the plan also carries a static time-of-use price.
 - **Tiered plan** (different price per consumption band): `sensor.rae_price_single`
-  holds the average across tiers, plus `sensor.rae_price_tier1`,
+  holds the average across tiers (unknown while a tier price is not
+  published), plus `sensor.rae_price_tier1`,
   `sensor.rae_price_tier2`, ... for each band.
 - **Day/night plan**: `sensor.rae_price_single` holds the average, plus
   `sensor.rae_price_day` and `sensor.rae_price_night`.
 
 Always created: `sensor.rae_price_period` (the registry month the price refers
 to, as `MM/YYYY`) and `sensor.rae_last_updated` (feed refresh timestamp). Price
-sensors expose `provider`, `plan`, `discounted_price`, `matched_period`,
-`product_kind` and `available` as attributes.
+sensors expose `provider`, `plan`, `segment`, `discounted_price`,
+`matched_period`, `product_kind` and `available` as attributes.
+
+When the registry changes the structure of a plan (for example from a single
+price to consumption tiers), the integration reloads itself and adds or removes
+the tier, day/night and dual-zone sensors to match.
 
 If the current month's tariff is not found, the integration searches back up to
 12 months so the sensors still report the most recent applicable price.
