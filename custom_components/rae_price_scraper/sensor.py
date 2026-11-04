@@ -1,9 +1,16 @@
 """RAE electricity price sensors.
 
 Reads a Greek electricity tariff from a maintained JSON endpoint and exposes,
-per matched product, one of: a single-zone price (sensor.rae_price_single),
-per-tier prices, or day/night prices, plus a dual-zone price where a flat plan
-carries one, the price period, and sensor.rae_last_updated (timestamp).
+per matched product:
+
+- sensor.rae_price_single: the price of the chosen plan, standard or
+  discounted as configured. Its entity_id and unique_id never change, so it
+  can stay in the Energy dashboard across plan changes.
+- sensor.rae_price_standard and sensor.rae_price_discounted: both prices of
+  the same plan, whatever the discount setting.
+- per-tier or day/night prices, or a dual-zone price where a flat plan
+  carries one (these follow the discount setting);
+- the price period and sensor.rae_last_updated (timestamp).
 
 A single DataUpdateCoordinator fetches the feed once and all sensors read it.
 """
@@ -30,66 +37,21 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .api import fetch_rae_feed
-from .catalog import plan_base
+from .catalog import as_price, average_price, feed_rows, find_members, row_price
 from .const import (
     CONF_DISCOUNTED,
     CONF_PLAN,
     CONF_PROVIDER,
+    CONF_SEGMENT,
     CONF_URL,
     DEFAULT_URL,
     DOMAIN,
+    SEGMENT_HOUSEHOLD,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 UPDATE_INTERVAL = timedelta(hours=12)
-
-def _previous_month(d):
-    if d.month == 1:
-        return d.replace(year=d.year - 1, month=12, day=1)
-    return d.replace(month=d.month - 1, day=1)
-
-
-def _plan_matches(row_plan, plan):
-    """Exact match against the configured plan, ignoring the version suffix."""
-    if not row_plan:
-        return False
-    return plan_base(row_plan) == plan or row_plan == plan
-
-
-def _find_members(rows, provider, plan):
-    """Return (members, year, month) for the matched product, most recent month.
-
-    A single tariff (one invoice-id) may span several feed rows: consumption
-    tiers (distinct kWh bands) or day/night zones. We return ALL rows of one
-    product so the caller can build tier/zone sensors. Commercially-available
-    products are preferred over withdrawn ones, and when a plan name maps to
-    more than one product in a month we take the first in feed order.
-
-    Returns ([], None, None) when nothing matches. Year/month come from the
-    matched rows so the period reflects the actual data, not just the searched
-    month.
-    """
-    search_date = datetime.datetime.now()
-    for _ in range(12):
-        month_filter = str(search_date.month)
-        month_rows = [
-            r for r in rows
-            if r.get("provider") == provider
-            and r.get("month") == month_filter
-            and _plan_matches(r.get("plan"), plan)
-        ]
-        if month_rows:
-            available = [r for r in month_rows if r.get("available", True)]
-            pool = available or month_rows
-            by_invoice = {}
-            for r in pool:
-                by_invoice.setdefault(r.get("invoice"), []).append(r)
-            members = next(iter(by_invoice.values()))
-            year = members[0].get("year")
-            return members, int(year) if year else None, int(month_filter)
-        search_date = _previous_month(search_date)
-    return [], None, None
 
 
 def _classify(members):
@@ -116,36 +78,44 @@ def _kwh_label(kwh_min, kwh_max):
     return f"{lo}-{kwh_max} kWh"
 
 
-def _as_price(raw):
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
-
-
-def _row_price(row, discounted):
-    """The configured (discounted or base) supply price of a single row."""
-    return _as_price(row.get("price_on" if discounted else "price_off"))
+def _fmt(price):
+    return None if price is None else f"{price:.5f}"
 
 
 class RAEDataCoordinator(DataUpdateCoordinator):
-    """Fetches the JSON feed once for all sensors of an entry."""
+    """Fetches the JSON feed once for all sensors of an entry.
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, url: str):
+    It also holds the entry's selection (provider, plan, segment), so every
+    sensor matches the product the same way through members().
+    """
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         super().__init__(
             hass, _LOGGER, config_entry=entry, name="RAE electricity price feed",
             update_interval=UPDATE_INTERVAL,
         )
-        self._url = url
+        cfg = entry.data
+        self._url = cfg.get(CONF_URL) or DEFAULT_URL
+        self.provider = cfg[CONF_PROVIDER]
+        self.plan = cfg[CONF_PLAN]
+        self.segment = cfg.get(CONF_SEGMENT) or SEGMENT_HOUSEHOLD
 
     async def _async_update_data(self):
         return await self.hass.async_add_executor_job(self._fetch)
 
     def _fetch(self):
         try:
-            return fetch_rae_feed(self._url)
+            payload = fetch_rae_feed(self._url)
         except Exception as e:
             raise UpdateFailed(f"Error fetching RAE feed: {e}") from e
+        # One list with household and business rows, each with its segment.
+        return {"updated_utc": payload.get("updated_utc"),
+                "rows": feed_rows(payload)}
+
+    def members(self):
+        """(members, year, month) of the configured product."""
+        return find_members(self.data.get("rows", []),
+                            self.provider, self.plan, self.segment)
 
 
 async def async_setup_entry(
@@ -154,37 +124,35 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the sensors from a config entry."""
-    cfg = entry.data
-    coordinator = RAEDataCoordinator(hass, entry, cfg.get(CONF_URL) or DEFAULT_URL)
+    coordinator = RAEDataCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
-    provider = cfg[CONF_PROVIDER]
-    plan = cfg[CONF_PLAN]
-    discounted = bool(cfg.get(CONF_DISCOUNTED, True))
-    device_name = entry.title or f"RAE {provider} - {plan}"
-    ids = (entry.entry_id, device_name)
+    discounted = bool(entry.data.get(CONF_DISCOUNTED, True))
+    device_name = entry.title or f"RAE {coordinator.provider} - {coordinator.plan}"
+    args = (coordinator, discounted, entry.entry_id, device_name)
+
+    _remove_legacy_entities(hass, entry)
 
     entities = [
-        RAEPriceSensor(coordinator, provider, plan, discounted, *ids),
-        RAEPricePeriodSensor(coordinator, provider, plan, discounted, *ids),
-        RAELastUpdatedSensor(coordinator, provider, plan, discounted, *ids),
+        RAEPriceSensor(*args),
+        RAEStandardPriceSensor(*args),
+        RAEDiscountedPriceSensor(*args),
+        RAEPricePeriodSensor(*args),
+        RAELastUpdatedSensor(*args),
     ]
 
     # Shape the extra price sensors to the matched product's structure.
-    members, _, _ = _find_members(coordinator.data.get("rows", []), provider, plan)
+    members, _, _ = coordinator.members()
     shape = _extra_shape(members)
     for spec in shape or ():
         if spec[0] == "tier":
             _, tier_index, kwh_min, kwh_max = spec
             entities.append(RAETierPriceSensor(
-                coordinator, provider, plan, discounted, *ids,
-                tier_index=tier_index, kwh_min=kwh_min, kwh_max=kwh_max))
+                *args, tier_index=tier_index, kwh_min=kwh_min, kwh_max=kwh_max))
         elif spec[0] == "zone":
-            entities.append(RAEZonePriceSensor(
-                coordinator, provider, plan, discounted, *ids, zone=spec[1]))
+            entities.append(RAEZonePriceSensor(*args, zone=spec[1]))
         else:
-            entities.append(RAEDualPriceSensor(
-                coordinator, provider, plan, discounted, *ids))
+            entities.append(RAEDualPriceSensor(*args))
 
     if shape is not None:
         _remove_stale_extras(hass, entry, {_spec_role(s) for s in shape})
@@ -195,8 +163,7 @@ async def async_setup_entry(
         # tiered, a third tier, ...). Reload so the extra sensors match it.
         # A refresh where the plan is missing is ignored, so a feed glitch
         # never removes sensors.
-        new_members, _, _ = _find_members(
-            coordinator.data.get("rows", []), provider, plan)
+        new_members, _, _ = coordinator.members()
         new_shape = _extra_shape(new_members)
         if new_shape is not None and new_shape != shape:
             _LOGGER.info("Product structure of '%s' changed; reloading",
@@ -257,6 +224,24 @@ def _remove_stale_extras(hass, entry, keep_roles):
             registry.async_remove(reg_entry.entity_id)
 
 
+def _remove_legacy_entities(hass, entry):
+    """Delete this entry's entities whose unique_id predates version 1.2.
+
+    Since 1.2 every entity unique_id is <entry_id>_<role>. Entities with an
+    older, plan-based unique_id were left behind by plan changes in earlier
+    versions; nothing can ever update them again, so they only show up as
+    unavailable. The 1.2 migration renames the entities of the current plan
+    before this runs, so only those leftovers are removed.
+    """
+    registry = er.async_get(hass)
+    prefix = f"{entry.entry_id}_"
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if not reg_entry.unique_id.startswith(prefix):
+            _LOGGER.info("Removing %s: left over from an earlier version",
+                         reg_entry.entity_id)
+            registry.async_remove(reg_entry.entity_id)
+
+
 class _RAEBaseEntity(CoordinatorEntity):
     _attr_has_entity_name = True
     # Stable, rae_-prefixed object id. Pinning entity_id here bypasses Home
@@ -268,10 +253,8 @@ class _RAEBaseEntity(CoordinatorEntity):
     # so changing the plan or the discount keeps the same entity and history.
     _role = None
 
-    def __init__(self, coordinator, provider, plan, discounted, entry_id, device_name):
+    def __init__(self, coordinator, discounted, entry_id, device_name):
         super().__init__(coordinator)
-        self._provider = provider
-        self._plan = plan
         self._discounted = discounted
         self._entry_id = entry_id
         self._device_name = device_name
@@ -297,8 +280,7 @@ class _RAEPriceEntity(_RAEBaseEntity, SensorEntity):
     _attr_native_unit_of_measurement = "EUR/kWh"
 
     def _members(self):
-        return _find_members(self.coordinator.data.get("rows", []),
-                             self._provider, self._plan)
+        return self.coordinator.members()
 
     @property
     def extra_state_attributes(self):
@@ -306,8 +288,9 @@ class _RAEPriceEntity(_RAEBaseEntity, SensorEntity):
         return {
             'last_found_month': month,
             'matched_period': _format_period(year, month),
-            'provider': self._provider,
-            'plan': self._plan,
+            'provider': self.coordinator.provider,
+            'plan': self.coordinator.plan,
+            'segment': self.coordinator.segment,
             'discounted_price': "Y" if self._discounted else "N",
             'product_kind': _classify(members) if members else None,
             'available': members[0].get('available') if members else None,
@@ -315,11 +298,12 @@ class _RAEPriceEntity(_RAEBaseEntity, SensorEntity):
 
 
 class RAEPriceSensor(_RAEPriceEntity):
-    """Primary per-kWh price, keeping the historical entity_id.
+    """Price of the chosen plan, keeping the historical entity_id.
 
     For a flat plan this is the single-zone price. For a tiered or day/night
     plan it is the average across the tiers/zones, so a user who does not care
-    about the breakdown still gets one sensible number.
+    about the breakdown still gets one sensible number. It is unknown until
+    every tier or zone has a published price.
     """
 
     _entity_slug = "rae_price_single"
@@ -334,22 +318,46 @@ class RAEPriceSensor(_RAEPriceEntity):
     @property
     def native_value(self):
         members, _, _ = self._members()
-        prices = [_row_price(m, self._discounted) for m in members]
-        # An average over only the known tiers or zones would be a wrong
-        # number (for hybrid plans it is just the first tier's price), so the
-        # sensor is unknown until every tier or zone has a published price.
-        if not prices or any(p is None for p in prices):
-            return None
-        return f"{sum(prices) / len(prices):.5f}"
+        return _fmt(average_price(members, self._discounted))
+
+
+class _RAEFixedPriceSensor(RAEPriceSensor):
+    """The plan's price with a fixed discount choice, ignoring the setting."""
+
+    _fixed_discount: bool
+
+    def __init__(self, coordinator, discounted, entry_id, device_name):
+        super().__init__(coordinator, self._fixed_discount, entry_id, device_name)
+
+    @property
+    def name(self):
+        return self._attr_name
+
+
+class RAEStandardPriceSensor(_RAEFixedPriceSensor):
+    """The standard (not discounted) price of the chosen plan, always."""
+
+    _fixed_discount = False
+    _attr_name = "Standard price"
+    _entity_slug = "rae_price_standard"
+    _role = "price_standard"
+
+
+class RAEDiscountedPriceSensor(_RAEFixedPriceSensor):
+    """The discounted price of the chosen plan, always."""
+
+    _fixed_discount = True
+    _attr_name = "Discounted price"
+    _entity_slug = "rae_price_discounted"
+    _role = "price_discounted"
 
 
 class RAETierPriceSensor(_RAEPriceEntity):
     """Per-kWh price for one consumption tier of a tiered plan."""
 
-    def __init__(self, coordinator, provider, plan, discounted, entry_id,
-                 device_name, *, tier_index, kwh_min, kwh_max):
-        super().__init__(coordinator, provider, plan, discounted,
-                         entry_id, device_name)
+    def __init__(self, coordinator, discounted, entry_id, device_name, *,
+                 tier_index, kwh_min, kwh_max):
+        super().__init__(coordinator, discounted, entry_id, device_name)
         self._tier_index = tier_index
         self._kwh_min = kwh_min
         self._kwh_max = kwh_max
@@ -366,8 +374,7 @@ class RAETierPriceSensor(_RAEPriceEntity):
         members, _, _ = self._members()
         for m in members:
             if (m.get("tier_index") or 1) == self._tier_index:
-                price = _row_price(m, self._discounted)
-                return None if price is None else f"{price:.5f}"
+                return _fmt(row_price(m, self._discounted))
         return None
 
     @property
@@ -383,10 +390,8 @@ class RAEZonePriceSensor(_RAEPriceEntity):
 
     _ICONS = {"day": "mdi:weather-sunny", "night": "mdi:weather-night"}
 
-    def __init__(self, coordinator, provider, plan, discounted, entry_id,
-                 device_name, *, zone):
-        super().__init__(coordinator, provider, plan, discounted,
-                         entry_id, device_name)
+    def __init__(self, coordinator, discounted, entry_id, device_name, *, zone):
+        super().__init__(coordinator, discounted, entry_id, device_name)
         self._zone = zone
         self._role = zone
         self.entity_id = ENTITY_ID_FORMAT.format(f"rae_price_{zone}")
@@ -404,8 +409,7 @@ class RAEZonePriceSensor(_RAEPriceEntity):
         members, _, _ = self._members()
         for m in members:
             if m.get("zone") == self._zone:
-                price = _row_price(m, self._discounted)
-                return None if price is None else f"{price:.5f}"
+                return _fmt(row_price(m, self._discounted))
         return None
 
 
@@ -421,9 +425,8 @@ class RAEDualPriceSensor(_RAEPriceEntity):
         members, _, _ = self._members()
         if not members:
             return None
-        price = _as_price(members[0].get(
-            "price_on_dual" if self._discounted else "price_off_dual"))
-        return None if price is None else f"{price:.5f}"
+        return _fmt(as_price(members[0].get(
+            "price_on_dual" if self._discounted else "price_off_dual")))
 
 
 class RAEPricePeriodSensor(_RAEBaseEntity, SensorEntity):
@@ -436,8 +439,7 @@ class RAEPricePeriodSensor(_RAEBaseEntity, SensorEntity):
 
     @property
     def native_value(self):
-        _, year, month = _find_members(self.coordinator.data.get("rows", []),
-                                       self._provider, self._plan)
+        _, year, month = self.coordinator.members()
         return _format_period(year, month)
 
 
